@@ -1,13 +1,5 @@
-import { createDemoState } from "./demo.js";
-import {
-  addExpense,
-  calculateBalances,
-  recordSettlement,
-  splitCustom,
-  splitEqual,
-  splitPercentage,
-  suggestSettlements
-} from "./finance.js";
+import { InMemoryExpenseRepository } from "./repository.js";
+import { ExpenseService } from "./services/expense-service.js";
 
 const localeCodes = ["pt-BR", "en-US", "es-ES"];
 const languageByBrowser = navigator.language.toLowerCase().startsWith("pt")
@@ -15,19 +7,27 @@ const languageByBrowser = navigator.language.toLowerCase().startsWith("pt")
   : navigator.language.toLowerCase().startsWith("es") ? "es-ES" : "en-US";
 let language = languageByBrowser;
 let dictionary = {};
-let state = createDemoState();
+let savedLanguage;
+try {
+  savedLanguage = localStorage.getItem("rachid-language");
+} catch {}
+if (localeCodes.includes(savedLanguage)) language = savedLanguage;
+const repository = new InMemoryExpenseRepository();
+const service = new ExpenseService(repository);
+let state = repository.getState();
 let activePage = "home";
 let selectedGroupId = state.groups[0]?.id ?? "";
-let deferredInstallPrompt;
 
 const root = document.querySelector("#app");
 const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[character]);
 const t = (key, values = {}) => {
-  const value = key.split(".").reduce((object, part) => object?.[part], dictionary) ?? key;
+  const value = key.split(".").reduce((object, part) => object?.[part], dictionary) ??
+    key.split(".").reduce((object, part) => object?.[part], fallbackDictionary) ?? key;
   return escapeHTML(value.replace(/\{(\w+)\}/g, (_, name) => values[name] ?? ""));
 };
+let fallbackDictionary = {};
 const money = (cents) => new Intl.NumberFormat(language, {
   style: "currency", currency: "BRL"
 }).format(cents / 100);
@@ -63,7 +63,7 @@ function expensesFor(groupId) {
 }
 
 function groupBalances(groupId) {
-  return calculateBalances(state, groupId);
+  return service.balances(groupId);
 }
 
 function historicalMemberIds(groupId) {
@@ -114,7 +114,7 @@ function homePage() {
 function groupsPage() {
   return `<header class="page-heading"><div><p class="eyebrow">${t("groups.eyebrow")}</p><h1>${t("groups.heading")}</h1></div><span class="count-pill">${state.groups.length}</span></header>
   <div class="group-layout"><section class="group-stack">${state.groups.length ? state.groups.map((group) => `<article class="panel group-card">
-    <div class="group-card-head"><div class="group-symbol" aria-hidden="true">${escapeHTML(group.name.slice(0, 1).toUpperCase())}</div><div><h2>${escapeHTML(group.name)}</h2><p>${t(categoryKey(group.category))} · ${t("groups.members", { count: group.memberIds.length })}</p></div></div>
+    <div class="group-card-head"><div class="group-symbol" aria-hidden="true">${escapeHTML(group.name.slice(0, 1).toUpperCase())}</div><div><h2>${escapeHTML(group.name)}</h2><p>${t(categoryKey(group.category))} · ${t("groups.members", { count: group.memberIds.length })}</p></div><button type="button" class="icon-button" data-edit-group="${escapeHTML(group.id)}" aria-label="${t("groups.edit")}">✎</button></div>
     <div class="member-chips">${group.memberIds.map((id) => `<span class="member-chip">${escapeHTML(member(id))}<button type="button" data-remove-member="${escapeHTML(id)}" data-group-id="${escapeHTML(group.id)}" aria-label="${t("groups.removeMember", { name: member(id) })}">×</button></span>`).join("")}</div>
     <form class="inline-form" data-form="member" data-group-id="${escapeHTML(group.id)}"><label class="sr-only" for="member-${escapeHTML(group.id)}">${t("groups.memberName")}</label><input id="member-${escapeHTML(group.id)}" name="name" maxlength="60" placeholder="${t("groups.memberPlaceholder")}" required><button type="submit" class="button button-small">${t("groups.addMember")}</button></form>
   </article>`).join("") : `<p class="empty-state panel">${t("common.empty")}</p>`}</section>
@@ -161,7 +161,7 @@ function settlementsPage() {
   if (!group) return `<header class="page-heading"><div><p class="eyebrow">${t("settlements.eyebrow")}</p><h1>${t("settlements.heading")}</h1></div></header><p class="panel empty-state">${t("common.empty")}</p>`;
   const balances = groupBalances(group.id);
   const people = historicalMemberIds(group.id);
-  const suggestions = suggestSettlements(balances);
+  const suggestions = service.suggestions(group.id);
   const payments = state.payments.filter((payment) => payment.groupId === group.id);
   return `<header class="page-heading"><div><p class="eyebrow">${t("settlements.eyebrow")}</p><h1>${t("settlements.heading")}</h1><p>${t("settlements.description")}</p></div>${state.groups.length > 1 ? groupPicker() : ""}</header>
   <div class="settlement-layout"><section class="panel balance-panel"><div class="section-heading"><div><p class="eyebrow">${t("settlements.balances")}</p><h2>${t("settlements.balances")}</h2></div></div>
@@ -248,16 +248,13 @@ function handleSubmit(event) {
   if (type === "group") {
     const name = String(data.get("name") ?? "").trim();
     if (!name) return notify(t("validation.groupName"));
-    const id = crypto.randomUUID();
-    state.groups.push({ id, name, category: data.get("category"), memberIds: [state.currentUserId] });
+    const id = repository.createGroup(name, String(data.get("category")));
     selectedGroupId = id;
     activePage = "groups";
   } else if (type === "member") {
     const name = String(data.get("name") ?? "").trim();
     if (!name) return notify(t("validation.memberName"));
-    const id = crypto.randomUUID();
-    state.members.push({ id, name });
-    state.groups.find((group) => group.id === form.dataset.groupId)?.memberIds.push(id);
+    repository.addMember(form.dataset.groupId, name);
   } else if (type === "expense") {
     const description = String(data.get("description") ?? "").trim();
     const cents = amountCents(data.get("amount"));
@@ -266,30 +263,30 @@ function handleSubmit(event) {
     if (!Number.isSafeInteger(cents) || cents <= 0) return notify(t("validation.amount"));
     if (!participants.length) return notify(t("validation.participants"));
     const method = String(data.get("method"));
-    let splits;
     try {
-      if (method === "equal") splits = splitEqual(cents, participants);
+      let customAmounts;
+      let percentages;
       if (method === "custom") {
-        const amounts = Object.fromEntries(participants.map((id) => [id, amountCents(data.get(`custom_${id}`))]));
-        if (Object.values(amounts).some((amount) => !Number.isSafeInteger(amount))) {
+        customAmounts = Object.fromEntries(participants.map((id) => [id, amountCents(data.get(`custom_${id}`))]));
+        if (Object.values(customAmounts).some((amount) => !Number.isSafeInteger(amount))) {
           return notify(t("validation.custom"));
         }
-        splits = splitCustom(cents, amounts);
       }
       if (method === "percentage") {
-        const percentages = Object.fromEntries(participants.map((id) => [id, percentageBasisPoints(String(data.get(`percentage_${id}`) ?? ""))]));
+        percentages = Object.fromEntries(participants.map((id) => [id, percentageBasisPoints(String(data.get(`percentage_${id}`) ?? ""))]));
         if (Object.values(percentages).some((amount) => !Number.isSafeInteger(amount))) {
           return notify(t("validation.percentage"));
         }
-        splits = splitPercentage(cents, percentages);
       }
-      addExpense(state, {
+      service.createExpense({
         groupId: String(data.get("groupId")),
         description,
         amountCents: cents,
         category: String(data.get("category")),
         paidBy: String(data.get("paidBy")),
-        splits,
+        participants,
+        customAmounts,
+        percentages,
         method
       });
       selectedGroupId = String(data.get("groupId"));
@@ -311,7 +308,8 @@ function handleClick(event) {
   const reset = event.target.closest('[data-action="reset"]');
   if (reset) {
     if (window.confirm(t("confirm.reset"))) {
-      state = createDemoState();
+      repository.reset();
+      state = repository.getState();
       selectedGroupId = state.groups[0]?.id ?? "";
       activePage = "home";
       render();
@@ -322,7 +320,7 @@ function handleClick(event) {
   if (remove) {
     const group = state.groups.find((item) => item.id === remove.dataset.groupId);
     if (group && group.memberIds.length > 1) {
-      group.memberIds = group.memberIds.filter((id) => id !== remove.dataset.removeMember);
+      repository.removeMember(group.id, remove.dataset.removeMember);
       render();
     }
     return;
@@ -330,7 +328,7 @@ function handleClick(event) {
   const settle = event.target.closest("[data-settle]");
   if (settle) {
     try {
-      recordSettlement(state, selectedGroupId, {
+      service.recordSettlement(selectedGroupId, {
         payerId: settle.dataset.settle,
         receiverId: settle.dataset.receiver,
         amountCents: Number(settle.dataset.amount)
@@ -341,6 +339,15 @@ function handleClick(event) {
       render();
     }
   }
+  const editGroup = event.target.closest("[data-edit-group]");
+  if (editGroup) {
+    const group = state.groups.find((item) => item.id === editGroup.dataset.editGroup);
+    const name = window.prompt(t("groups.edit"), group?.name ?? "");
+    if (group && name?.trim()) {
+      repository.renameGroup(group.id, name.trim().slice(0, 60));
+      render();
+    }
+  }
 }
 
 async function loadLanguage(code) {
@@ -348,6 +355,15 @@ async function loadLanguage(code) {
   if (!response.ok) return;
   dictionary = await response.json();
   language = localeCodes.includes(code) ? code : "en-US";
+  try {
+    localStorage.setItem("rachid-language", language);
+  } catch {}
+  render();
+}
+
+async function loadFallback() {
+  const response = await fetch("/locales/en-US.json");
+  if (response.ok) fallbackDictionary = await response.json();
   render();
 }
 
@@ -359,12 +375,7 @@ root.addEventListener("input", (event) => {
     event.target.setCustomValidity(/^\d+(?:\.\d{1,2})?$/.test(event.target.value) ? "" : t("validation.amount"));
   }
 });
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-});
-
-await loadLanguage(language);
+await Promise.all([loadLanguage(language), loadFallback()]);
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }

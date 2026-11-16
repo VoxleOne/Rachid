@@ -7,6 +7,6 @@
     "dev": "node server.mjs",
     "start": "node server.mjs",
     "test": "node --test",
-    "build": "node --check src/app.js && node --check src/finance.js && node --check server.mjs"
+    "build": "node --check src/app.js && node --check src/finance.js && node --check src/repository.js && node --check src/services/expense-service.js && node --check server.mjs"
   }
 }

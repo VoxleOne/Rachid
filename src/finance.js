@@ -1,5 +1,6 @@
 export function splitEqual(totalCents, participantIds) {
-  if (!Number.isSafeInteger(totalCents) || totalCents < 0 || participantIds.length === 0) {
+  if (!Number.isSafeInteger(totalCents) || totalCents < 0 || participantIds.length === 0 ||
+      new Set(participantIds).size !== participantIds.length) {
     throw new Error("invalid_split");
   }
   const base = Math.floor(totalCents / participantIds.length);
@@ -9,13 +10,18 @@ export function splitEqual(totalCents, participantIds) {
 
 export function splitPercentage(totalCents, percentages) {
   const entries = Object.entries(percentages);
-  if (!entries.length || entries.some(([, value]) => !Number.isSafeInteger(value) || value < 0) ||
+  if (!Number.isSafeInteger(totalCents) || totalCents < 0 || !entries.length ||
+      entries.some(([, value]) => !Number.isSafeInteger(value) || value < 0) ||
       entries.reduce((sum, [, value]) => sum + value, 0) !== 10000) {
     throw new Error("invalid_percentages");
   }
   const exact = entries.map(([id, basisPoints]) => {
-    const numerator = totalCents * basisPoints;
-    return { id, cents: Math.floor(numerator / 10000), remainder: numerator % 10000 };
+    const numerator = BigInt(totalCents) * BigInt(basisPoints);
+    return {
+      id,
+      cents: Number(numerator / 10000n),
+      remainder: Number(numerator % 10000n)
+    };
   });
   let remaining = totalCents - exact.reduce((sum, entry) => sum + entry.cents, 0);
   exact.sort((a, b) => b.remainder - a.remainder || a.id.localeCompare(b.id));
@@ -25,8 +31,9 @@ export function splitPercentage(totalCents, percentages) {
 
 export function splitCustom(totalCents, amounts) {
   const entries = Object.entries(amounts);
-  if (!entries.length || entries.some(([, value]) => !Number.isSafeInteger(value) || value < 0) ||
-      entries.reduce((sum, [, value]) => sum + value, 0) !== totalCents) {
+  if (!Number.isSafeInteger(totalCents) || totalCents < 0 || !entries.length ||
+      entries.some(([, value]) => !Number.isSafeInteger(value) || value < 0) ||
+      entries.reduce((sum, [, value]) => sum + BigInt(value), 0n) !== BigInt(totalCents)) {
     throw new Error("invalid_custom_amounts");
   }
   return Object.fromEntries(entries);
@@ -36,15 +43,20 @@ export function calculateBalances(state, groupId) {
   const group = state.groups.find((item) => item.id === groupId);
   if (!group) throw new Error("group_not_found");
   const result = Object.fromEntries(group.memberIds.map((id) => [id, 0]));
+  const addBalance = (id, amount) => {
+    const balance = (result[id] ?? 0) + amount;
+    if (!Number.isSafeInteger(balance)) throw new Error("balance_out_of_range");
+    result[id] = balance;
+  };
   for (const expense of state.expenses.filter((item) => item.groupId === groupId)) {
-    result[expense.paidBy] = (result[expense.paidBy] ?? 0) + expense.amountCents;
+    addBalance(expense.paidBy, expense.amountCents);
     for (const [memberId, cents] of Object.entries(expense.splits)) {
-      result[memberId] = (result[memberId] ?? 0) - cents;
+      addBalance(memberId, -cents);
     }
   }
   for (const payment of state.payments.filter((item) => item.groupId === groupId && item.status === "confirmed")) {
-    result[payment.payerId] = (result[payment.payerId] ?? 0) + payment.amountCents;
-    result[payment.receiverId] = (result[payment.receiverId] ?? 0) - payment.amountCents;
+    addBalance(payment.payerId, payment.amountCents);
+    addBalance(payment.receiverId, -payment.amountCents);
   }
   return result;
 }
@@ -86,7 +98,7 @@ export function addExpense(state, expense) {
   if (!expense.description.trim() || !Number.isSafeInteger(expense.amountCents) ||
       expense.amountCents <= 0 || splits.length === 0 ||
       splits.some(([id, cents]) => !group.memberIds.includes(id) || !Number.isSafeInteger(cents) || cents < 0) ||
-      splits.reduce((sum, [, cents]) => sum + cents, 0) !== expense.amountCents) {
+      splits.reduce((sum, [, cents]) => sum + BigInt(cents), 0n) !== BigInt(expense.amountCents)) {
     throw new Error("invalid_expense");
   }
   state.expenses.unshift({ ...expense, id: crypto.randomUUID(), createdAt: new Date().toISOString() });

@@ -39,6 +39,7 @@
     "name": "Nombre del grupo",
     "namePlaceholder": "p. ej., Viaje de verano",
     "category": "Categoría",
+    "edit": "Editar grupo",
     "addMember": "Añadir participante",
     "memberName": "Nombre de la persona",
     "memberPlaceholder": "Nombre",

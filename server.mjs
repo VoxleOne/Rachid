@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL(".", import.meta.url));
+const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const types = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -32,6 +32,6 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404).end("Not found");
   }
-}).listen(Number(process.env.PORT ?? 4173), "0.0.0.0", () => {
+}).listen(Number(process.env.PORT ?? 4173), "127.0.0.1", () => {
   console.log(`Rachid alpha available at http://localhost:${process.env.PORT ?? 4173}`);
 });

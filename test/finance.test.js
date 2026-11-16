@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDemoState } from "../src/demo.js";
+import { InMemoryExpenseRepository } from "../src/repository.js";
 import {
   addExpense,
   calculateBalances,
@@ -19,7 +20,18 @@ test("percentage split uses largest remainders and preserves total cents", () =>
   const result = splitPercentage(101, { a: 3333, b: 3333, c: 3334 });
   assert.deepEqual(Object.values(result).sort((a, b) => a - b), [33, 34, 34]);
   assert.equal(Object.values(result).reduce((sum, amount) => sum + amount, 0), 101);
+  assert.equal(Object.values(splitPercentage(Number.MAX_SAFE_INTEGER, { a: 9999, b: 1 }))
+    .reduce((sum, amount) => sum + amount, 0), Number.MAX_SAFE_INTEGER);
   assert.throws(() => splitPercentage(100, { a: 5000, b: 4999 }), /invalid_percentages/);
+});
+
+test("in-memory repository reset restores the demo session", () => {
+  const repository = new InMemoryExpenseRepository();
+  repository.createGroup("Temporary", "friends");
+  repository.reset();
+  assert.equal(repository.getState().groups.length, 1);
+  assert.equal(repository.getState().groups[0].name, "Serra weekend");
+  assert.equal(repository.getState().expenses.length, 4);
 });
 
 test("custom split rejects amounts that do not exactly match the total", () => {
